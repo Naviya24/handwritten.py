@@ -18,7 +18,7 @@ from tqdm import tqdm
 # (Include all the model classes from the previous code here: HandwritingDataset, Encoder, Attention, Generator, Discriminator, HandwritingGAN)
 
 class StreamlitHandwritingApp:
-    def _init_(self):
+    def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
         self.dataset = None
@@ -43,16 +43,13 @@ class StreamlitHandwritingApp:
     def process_uploaded_dataset(self, uploaded_file):
         """Process uploaded ZIP file containing dataset."""
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Save uploaded file
             zip_path = os.path.join(tmp_dir, 'dataset.zip')
             with open(zip_path, 'wb') as f:
                 f.write(uploaded_file.getvalue())
             
-            # Extract dataset
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall('uploads')
             
-            # Verify dataset structure
             data_dir = Path('uploads')
             if not (data_dir / 'labels.json').exists():
                 st.error("Dataset must contain a labels.json file!")
@@ -102,14 +99,12 @@ class StreamlitHandwritingApp:
                 batch_losses = self.model.train_step(images, captions, lengths)
                 epoch_losses.append(batch_losses)
                 
-                # Update progress
                 progress_text = f"Epoch {epoch+1}/{num_epochs} - "
                 progress_text += f"D_Loss: {batch_losses['d_loss']:.4f}, "
                 progress_text += f"G_Loss: {batch_losses['g_loss']:.4f}"
                 progress_bar.progress((epoch + 1) / num_epochs)
                 st.text(progress_text)
             
-            # Save model checkpoint
             if (epoch + 1) % 5 == 0:
                 self.save_model(f'epoch_{epoch+1}')
             
@@ -148,11 +143,9 @@ def main():
     Upload your dataset, train the model, and generate handwritten text!
     """)
     
-    # Initialize app
     app = StreamlitHandwritingApp()
     app.setup_folders()
     
-    # Sidebar for navigation
     page = st.sidebar.selectbox(
         "Choose a page",
         ["Upload Dataset", "Train Model", "Generate Handwriting"]
@@ -179,22 +172,17 @@ def main():
             st.error("Please upload a dataset first!")
             return
         
-        # Training parameters
         num_epochs = st.slider("Number of epochs", 1, 100, 20)
         
-        # Initialize model
         if app.model is None:
             app.initialize_model()
         
-        # Training button
         if st.button("Start Training"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # Train model
             losses = app.train_model(num_epochs, progress_bar)
             
-            # Plot training progress
             fig, ax = plt.subplots()
             ax.plot(losses)
             ax.set_xlabel('Epoch')
@@ -207,7 +195,6 @@ def main():
     elif page == "Generate Handwriting":
         st.header("Generate Handwritten Text")
         
-        # Model selection
         model_files = [f for f in os.listdir('models') if f.endswith('.pth')]
         if not model_files:
             st.error("No trained models found! Please train a model first.")
@@ -215,24 +202,20 @@ def main():
         
         selected_model = st.selectbox("Select a model", model_files)
         
-        # Load selected model
         if app.model is None or selected_model:
             app.load_model(f'models/{selected_model}')
         
-        # Text input
         text = st.text_input("Enter text to generate", "Hello World!")
         
         if st.button("Generate"):
             with st.spinner("Generating handwriting..."):
                 generated_image = app.generate_handwriting(text)
                 
-                # Convert and display image
                 plt.figure(figsize=(10, 4))
                 plt.imshow(generated_image.squeeze(), cmap='gray')
                 plt.axis('off')
                 st.pyplot(plt)
                 
-                # Option to download
                 st.download_button(
                     "Download Image",
                     data=Image.fromarray(generated_image),
@@ -240,5 +223,5 @@ def main():
                     mime="image/png"
                 )
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
