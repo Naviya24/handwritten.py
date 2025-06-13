@@ -63,6 +63,8 @@ def collate_fn(batch):
         'text': padded_texts,
         'length': lengths
     }
+
+class TextEncoder(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size):
         super(TextEncoder, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_size)
@@ -179,6 +181,7 @@ class HandwritingGAN(nn.Module):
         
         text_features = self.encoder(captions, lengths)
         
+        # Train Discriminator
         self.d_optimizer.zero_grad()
         real_output = self.discriminator(real_images, text_features.detach())
         d_real_loss = self.criterion(real_output, real_labels)
@@ -192,6 +195,7 @@ class HandwritingGAN(nn.Module):
         d_loss.backward()
         self.d_optimizer.step()
         
+        # Train Generator
         self.g_optimizer.zero_grad()
         fake_output = self.discriminator(fake_images, text_features)
         g_loss = self.criterion(fake_output, real_labels)
@@ -244,20 +248,24 @@ class StreamlitHandwritingApp:
         os.makedirs('generated', exist_ok=True)
     
     def process_uploaded_dataset(self, uploaded_file):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            zip_path = os.path.join(tmp_dir, 'dataset.zip')
-            with open(zip_path, 'wb') as f:
-                f.write(uploaded_file.getvalue())
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall('uploads')
-            
-            data_dir = Path('uploads')
-            if not (data_dir / 'labels.json').exists():
-                st.error("Dataset must contain a labels.json file!")
-                return False
-            
-            return True
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                zip_path = os.path.join(tmp_dir, 'dataset.zip')
+                with open(zip_path, 'wb') as f:
+                    f.write(uploaded_file.getvalue())
+                
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall('uploads')
+                
+                data_dir = Path('uploads')
+                if not (data_dir / 'labels.json').exists():
+                    st.error("Dataset must contain a labels.json file!")
+                    return False
+                
+                return True
+        except Exception as e:
+            st.error(f"Error processing dataset: {str(e)}")
+            return False
     
     def load_dataset(self):
         transform = transforms.Compose([
@@ -287,47 +295,58 @@ class StreamlitHandwritingApp:
     def train_model(self, num_epochs, progress_bar):
         losses = []
         
-        for epoch in range(num_epochs):
-            epoch_losses = []
-            dataloader = self.load_dataset()
-            
-            for batch in dataloader:
-                images = batch['image'].to(self.device)
-                captions = batch['text'].to(self.device)
-                lengths = batch['length']
+        try:
+            for epoch in range(num_epochs):
+                epoch_losses = []
+                dataloader = self.load_dataset()
                 
-                batch_losses = self.model.train_step(images, captions, lengths)
-                epoch_losses.append(batch_losses)
+                for batch in dataloader:
+                    images = batch['image'].to(self.device)
+                    captions = batch['text'].to(self.device)
+                    lengths = batch['length']
+                    
+                    batch_losses = self.model.train_step(images, captions, lengths)
+                    epoch_losses.append(batch_losses)
+                    
+                progress_text = f"Epoch {epoch+1}/{num_epochs} - "
+                progress_text += f"D_Loss: {np.mean([loss['d_loss'] for loss in epoch_losses]):.4f}, "
+                progress_text += f"G_Loss: {np.mean([loss['g_loss'] for loss in epoch_losses]):.4f}"
+                progress_bar.progress((epoch + 1) / num_epochs)
+                st.text(progress_text)
                 
-            progress_text = f"Epoch {epoch+1}/{num_epochs} - "
-            progress_text += f"D_Loss: {np.mean([loss['d_loss'] for loss in epoch_losses]):.4f}, "
-            progress_text += f"G_Loss: {np.mean([loss['g_loss'] for loss in epoch_losses]):.4f}"
-            progress_bar.progress((epoch + 1) / num_epochs)
+                if (epoch + 1) % 5 == 0:
+                    self.save_model(f'epoch_{epoch+1}')
+                
+                losses.append(np.mean([loss['g_loss'] for loss in epoch_losses]))
             
-            if (epoch + 1) % 5 == 0:
-                self.save_model(f'epoch_{epoch+1}')
-            
-            losses.append(np.mean([loss['g_loss'] for loss in epoch_losses]))
-        
-        return losses
+            return losses
+        except Exception as e:
+            st.error(f"Training error: {str(e)}")
+            return []
     
     def save_model(self, name):
-        checkpoint = {
-            'encoder_state_dict': self.model.encoder.state_dict(),
-            'generator_state_dict': self.model.generator.state_dict(),
-            'discriminator_state_dict': self.model.discriminator.state_dict(),
-            'hyperparams': self.hyperparams
-        }
-        torch.save(checkpoint, f'models/checkpoint_{name}.pth')
+        try:
+            checkpoint = {
+                'encoder_state_dict': self.model.encoder.state_dict(),
+                'generator_state_dict': self.model.generator.state_dict(),
+                'discriminator_state_dict': self.model.discriminator.state_dict(),
+                'hyperparams': self.hyperparams
+            }
+            torch.save(checkpoint, f'models/checkpoint_{name}.pth')
+        except Exception as e:
+            st.error(f"Error saving model: {str(e)}")
     
     def load_model(self, checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.hyperparams = checkpoint['hyperparams']
-        
-        self.initialize_model()
-        self.model.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-        self.model.generator.load_state_dict(checkpoint['generator_state_dict'])
-        self.model.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            self.hyperparams = checkpoint['hyperparams']
+            
+            self.initialize_model()
+            self.model.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+            self.model.generator.load_state_dict(checkpoint['generator_state_dict'])
+            self.model.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+        except Exception as e:
+            st.error(f"Error loading model: {str(e)}")
     
     def generate_handwriting(self, text):
         return self.model.generate_samples(text)
@@ -361,7 +380,13 @@ def main():
                 st.success("Dataset uploaded and processed successfully!")
                 try:
                     dataloader = app.load_dataset()
-                    st.write("Found {} samples".format(len(dataloader.dataset)))
+                    st.write(f"Found {len(dataloader.dataset)} samples")
+                    
+                    # Show sample data
+                    sample_batch = next(iter(dataloader))
+                    st.write(f"Batch size: {sample_batch['image'].shape[0]}")
+                    st.write(f"Image shape: {sample_batch['image'].shape}")
+                    
                 except Exception as e:
                     st.error(f"Error loading dataset: {str(e)}")
     
@@ -372,40 +397,71 @@ def main():
             st.error("Please upload a dataset first!")
             return
         
+        # Hyperparameter controls
+        st.subheader("Training Parameters")
         num_epochs = st.slider("Number of epochs", 1, 100, 20)
         
-        if app.model is None:
-            app.initialize_model()
+        col1, col2 = st.columns(2)
+        with col1:
+            batch_size = st.selectbox("Batch size", [8, 16, 32, 64], index=2)
+            learning_rate = st.selectbox("Learning rate", [0.0001, 0.0002, 0.0005], index=1)
+        
+        with col2:
+            latent_dim = st.selectbox("Latent dimension", [50, 100, 200], index=1)
+            hidden_size = st.selectbox("Hidden size", [256, 512, 1024], index=1)
+        
+        # Update hyperparameters
+        app.hyperparams.update({
+            'batch_size': batch_size,
+            'learning_rate': learning_rate,
+            'latent_dim': latent_dim,
+            'hidden_size': hidden_size
+        })
         
         if st.button("Start Training"):
+            with st.spinner("Initializing model..."):
+                app.initialize_model()
+                st.success("Model initialized successfully!")
+            
             progress_bar = st.progress(0)
-            losses = app.train_model(num_epochs, progress_bar)
+            status_text = st.empty()
             
-            fig, ax = plt.subplots()
-            ax.plot(losses)
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Generator Loss')
-            ax.set_title('Training Progress')
-            st.pyplot(fig)
+            with st.spinner("Training in progress..."):
+                losses = app.train_model(num_epochs, progress_bar)
             
-            st.success("Training completed!")
+            if losses:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.plot(losses, 'b-', linewidth=2)
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Generator Loss')
+                ax.set_title('Training Progress')
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+                st.success("Training completed successfully!")
+                st.balloons()
     
     elif page == "Generate Handwriting":
         st.header("Generate Handwritten Text")
         
-        model_files = [f for f in os.listdir('models') if f.endswith('.pth')] if os.path.exists('models') else []
+        model_files = []
+        if os.path.exists('models'):
+            model_files = [f for f in os.listdir('models') if f.endswith('.pth')]
+        
         if not model_files:
             st.error("No trained models found! Please train a model first.")
             return
         
         selected_model = st.selectbox("Select a model", model_files)
         
-        if app.model is None and selected_model:
-            app.load_model(f'models/{selected_model}')
+        if st.button("Load Model"):
+            with st.spinner("Loading model..."):
+                app.load_model(f'models/{selected_model}')
+                st.success("Model loaded successfully!")
         
         text = st.text_input("Enter text to generate", "Hello World!")
         
-        if st.button("Generate"):
+        if st.button("Generate Handwriting"):
             if app.model is None:
                 st.error("Please load a model first!")
                 return
@@ -414,11 +470,13 @@ def main():
                 try:
                     generated_image = app.generate_handwriting(text)
                     
-                    fig, ax = plt.subplots(figsize=(10, 4))
+                    fig, ax = plt.subplots(figsize=(12, 4))
                     ax.imshow(generated_image, cmap='gray')
+                    ax.set_title(f'Generated: "{text}"', fontsize=14)
                     ax.axis('off')
                     st.pyplot(fig)
                     
+                    # Convert to PIL Image for download
                     img_array = (generated_image * 255).astype(np.uint8)
                     img_pil = Image.fromarray(img_array)
                     
@@ -427,11 +485,12 @@ def main():
                     byte_im = buf.getvalue()
                     
                     st.download_button(
-                        "Download Image",
+                        "Download Generated Image",
                         data=byte_im,
-                        file_name="generated_handwriting.png",
+                        file_name=f"handwriting_{text.replace(' ', '_')}.png",
                         mime="image/png"
                     )
+                    
                 except Exception as e:
                     st.error(f"Error generating handwriting: {str(e)}")
 
