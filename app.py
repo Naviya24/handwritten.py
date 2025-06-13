@@ -83,8 +83,8 @@ class StreamlitHandwritingApp:
             
             return True
     
-   def load_dataset(self):
-    transform = transforms.Compose([
+    def load_dataset(self):
+        transform = transforms.Compose([
         transforms.Resize((64, 64)),
         transforms.ToTensor(),
         transforms.Normalize([0.5], [0.5])
