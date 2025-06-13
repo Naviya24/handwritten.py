@@ -11,11 +11,40 @@ import zipfile
 import tempfile
 from pathlib import Path
 import matplotlib.pyplot as plt
-import time
-from tqdm import tqdm
 
-# Import the model classes from previous code
-# (Include all the model classes from the previous code here: HandwritingDataset, Encoder, Attention, Generator, Discriminator, HandwritingGAN)
+# 🧠 Missing class now included
+class HandwritingDataset(Dataset):
+    def __init__(self, root_dir, transform=None):
+        self.root_dir = root_dir
+        self.transform = transform
+        self.labels_path = os.path.join(root_dir, "labels.json")
+
+        with open(self.labels_path, "r") as f:
+            self.labels = json.load(f)
+
+        self.image_files = list(self.labels.keys())
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_name = self.image_files[idx]
+        label = self.labels[img_name]
+
+        img_path = os.path.join(self.root_dir, img_name)
+        image = Image.open(img_path).convert("L")
+
+        if self.transform:
+            image = self.transform(image)
+
+        return {
+            'image': image,
+            'text': torch.tensor([ord(c) for c in label], dtype=torch.long),
+            'length': len(label)
+        }
+
+# NOTE: You must define the following class in a separate file or include it:
+# HandwritingGAN with Encoder, Attention, Generator, Discriminator
 
 class StreamlitHandwritingApp:
     def __init__(self):
@@ -23,7 +52,6 @@ class StreamlitHandwritingApp:
         self.model = None
         self.dataset = None
         
-        # Model hyperparameters
         self.hyperparams = {
             'latent_dim': 100,
             'vocab_size': 128,
@@ -35,13 +63,11 @@ class StreamlitHandwritingApp:
         }
     
     def setup_folders(self):
-        """Create necessary folders for the app."""
         os.makedirs('uploads', exist_ok=True)
         os.makedirs('models', exist_ok=True)
         os.makedirs('generated', exist_ok=True)
     
     def process_uploaded_dataset(self, uploaded_file):
-        """Process uploaded ZIP file containing dataset."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = os.path.join(tmp_dir, 'dataset.zip')
             with open(zip_path, 'wb') as f:
@@ -58,7 +84,6 @@ class StreamlitHandwritingApp:
             return True
     
     def load_dataset(self):
-        """Load the dataset and create DataLoader."""
         transform = transforms.Compose([
             transforms.Resize((64, 64)),
             transforms.ToTensor(),
@@ -74,7 +99,6 @@ class StreamlitHandwritingApp:
         )
     
     def initialize_model(self):
-        """Initialize the HandwritingGAN model."""
         self.model = HandwritingGAN(
             self.hyperparams['latent_dim'],
             self.hyperparams['vocab_size'],
@@ -84,7 +108,6 @@ class StreamlitHandwritingApp:
         ).to(self.device)
     
     def train_model(self, num_epochs, progress_bar):
-        """Train the model with progress updates."""
         losses = []
         
         for epoch in range(num_epochs):
@@ -113,7 +136,6 @@ class StreamlitHandwritingApp:
         return losses
     
     def save_model(self, name):
-        """Save model checkpoint."""
         checkpoint = {
             'encoder_state_dict': self.model.encoder.state_dict(),
             'generator_state_dict': self.model.generator.state_dict(),
@@ -123,7 +145,6 @@ class StreamlitHandwritingApp:
         torch.save(checkpoint, f'models/checkpoint_{name}.pth')
     
     def load_model(self, checkpoint_path):
-        """Load model from checkpoint."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.hyperparams = checkpoint['hyperparams']
         
@@ -133,7 +154,6 @@ class StreamlitHandwritingApp:
         self.model.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
     
     def generate_handwriting(self, text):
-        """Generate handwritten text."""
         return self.model.generate_samples(text)
 
 def main():
@@ -179,8 +199,6 @@ def main():
         
         if st.button("Start Training"):
             progress_bar = st.progress(0)
-            status_text = st.empty()
-            
             losses = app.train_model(num_epochs, progress_bar)
             
             fig, ax = plt.subplots()
