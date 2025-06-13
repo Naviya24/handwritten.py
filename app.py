@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import torch
 import torch.nn as nn
@@ -5,7 +6,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
-import os
 import json
 import zipfile
 import tempfile
@@ -83,20 +83,21 @@ class StreamlitHandwritingApp:
             
             return True
     
-    def load_dataset(self):
-        transform = transforms.Compose([
-            transforms.Resize((64, 64)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5])
-        ])
-        
-        self.dataset = HandwritingDataset('uploads', transform=transform)
-        return DataLoader(
-            self.dataset,
-            batch_size=self.hyperparams['batch_size'],
-            shuffle=True,
-            num_workers=2
-        )
+   def load_dataset(self):
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5])
+    ])
+
+    self.dataset = HandwritingDataset('uploads', transform=transform)
+    return DataLoader(
+        self.dataset,
+        batch_size=self.hyperparams['batch_size'],
+        shuffle=True,
+        num_workers=2
+    )
+
     
     def initialize_model(self):
         self.model = HandwritingGAN(
