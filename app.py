@@ -40,11 +40,29 @@ class HandwritingDataset(Dataset):
         
         return {
             'image': image,
-            'text': torch.tensor([ord(c) for c in label], dtype=torch.long),
+            'text': [ord(c) for c in label],
             'length': len(label)
         }
 
-class TextEncoder(nn.Module):
+def collate_fn(batch):
+    images = torch.stack([item['image'] for item in batch])
+    texts = [item['text'] for item in batch]
+    lengths = [item['length'] for item in batch]
+    
+    max_len = max(lengths)
+    padded_texts = []
+    
+    for text in texts:
+        padded = text + [0] * (max_len - len(text))
+        padded_texts.append(padded)
+    
+    padded_texts = torch.tensor(padded_texts, dtype=torch.long)
+    
+    return {
+        'image': images,
+        'text': padded_texts,
+        'length': lengths
+    }
     def __init__(self, vocab_size, embed_size, hidden_size):
         super(TextEncoder, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_size)
@@ -253,7 +271,8 @@ class StreamlitHandwritingApp:
             self.dataset,
             batch_size=self.hyperparams['batch_size'],
             shuffle=True,
-            num_workers=0
+            num_workers=0,
+            collate_fn=collate_fn
         )
     
     def initialize_model(self):
