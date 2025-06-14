@@ -229,18 +229,25 @@ class HandwritingGAN(nn.Module):
 class StreamlitHandwritingApp:
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = None
-        self.dataset = None
         
-        self.hyperparams = {
-            'latent_dim': 100,
-            'vocab_size': 128,
-            'embed_size': 256,
-            'hidden_size': 512,
-            'attention_dim': 256,
-            'batch_size': 32,
-            'learning_rate': 0.0002
-        }
+        # Initialize session state for model persistence
+        if 'model' not in st.session_state:
+            st.session_state.model = None
+        if 'model_loaded' not in st.session_state:
+            st.session_state.model_loaded = False
+        if 'hyperparams' not in st.session_state:
+            st.session_state.hyperparams = {
+                'latent_dim': 100,
+                'vocab_size': 128,
+                'embed_size': 256,
+                'hidden_size': 512,
+                'attention_dim': 256,
+                'batch_size': 32,
+                'learning_rate': 0.0002
+            }
+            
+        self.dataset = None
+        self.hyperparams = st.session_state.hyperparams
     
     def setup_folders(self):
         os.makedirs('uploads', exist_ok=True)
@@ -284,16 +291,18 @@ class StreamlitHandwritingApp:
         )
     
     def initialize_model(self):
-        self.model = HandwritingGAN(
+        model = HandwritingGAN(
             self.hyperparams['latent_dim'],
             self.hyperparams['vocab_size'],
             self.hyperparams['embed_size'],
             self.hyperparams['hidden_size'],
             self.hyperparams['attention_dim']
         ).to(self.device)
+        return model
     
     def train_model(self, num_epochs, progress_bar):
         losses = []
+        model = self.initialize_model()
         
         try:
             for epoch in range(num_epochs):
@@ -305,7 +314,7 @@ class StreamlitHandwritingApp:
                     captions = batch['text'].to(self.device)
                     lengths = batch['length']
                     
-                    batch_losses = self.model.train_step(images, captions, lengths)
+                    batch_losses = model.train_step(images, captions, lengths)
                     epoch_losses.append(batch_losses)
                     
                 progress_text = f"Epoch {epoch+1}/{num_epochs} - "
@@ -315,7 +324,7 @@ class StreamlitHandwritingApp:
                 st.text(progress_text)
                 
                 if (epoch + 1) % 5 == 0:
-                    self.save_model(f'epoch_{epoch+1}')
+                    self.save_model(model, f'epoch_{epoch+1}')
                 
                 losses.append(np.mean([loss['g_loss'] for loss in epoch_losses]))
             
@@ -324,12 +333,12 @@ class StreamlitHandwritingApp:
             st.error(f"Training error: {str(e)}")
             return []
     
-    def save_model(self, name):
+    def save_model(self, model, name):
         try:
             checkpoint = {
-                'encoder_state_dict': self.model.encoder.state_dict(),
-                'generator_state_dict': self.model.generator.state_dict(),
-                'discriminator_state_dict': self.model.discriminator.state_dict(),
+                'encoder_state_dict': model.encoder.state_dict(),
+                'generator_state_dict': model.generator.state_dict(),
+                'discriminator_state_dict': model.discriminator.state_dict(),
                 'hyperparams': self.hyperparams
             }
             torch.save(checkpoint, f'models/checkpoint_{name}.pth')
@@ -340,159 +349,310 @@ class StreamlitHandwritingApp:
         try:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             self.hyperparams = checkpoint['hyperparams']
+            st.session_state.hyperparams = self.hyperparams
             
-            self.initialize_model()
-            self.model.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-            self.model.generator.load_state_dict(checkpoint['generator_state_dict'])
-            self.model.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+            # Initialize and load model
+            model = HandwritingGAN(
+                self.hyperparams['latent_dim'],
+                self.hyperparams['vocab_size'],
+                self.hyperparams['embed_size'],
+                self.hyperparams['hidden_size'],
+                self.hyperparams['attention_dim']
+            ).to(self.device)
+            
+            model.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+            model.generator.load_state_dict(checkpoint['generator_state_dict'])
+            model.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+            
+            # Store in session state
+            st.session_state.model = model
+            st.session_state.model_loaded = True
+            
+            return True
         except Exception as e:
             st.error(f"Error loading model: {str(e)}")
+            return False
     
     def generate_handwriting(self, text):
-        return self.model.generate_samples(text)
+        # Use model from session state
+        if st.session_state.model is None:
+            return None
+            
+        model = st.session_state.model
+        model.eval()
+        
+        with torch.no_grad():
+            text_tensor = torch.tensor([ord(c) for c in text], dtype=torch.long).unsqueeze(0)
+            lengths = [len(text)]
+            
+            if next(model.parameters()).is_cuda:
+                text_tensor = text_tensor.cuda()
+            
+            text_features = model.encoder(text_tensor, lengths)
+            noise = torch.randn(1, model.latent_dim, device=text_features.device)
+            
+            generated_image = model.generator(noise, text_features)
+            generated_image = (generated_image + 1) / 2
+            generated_image = generated_image.cpu().numpy()[0, 0]
+            
+        return generated_image
 
 def main():
-    st.title("Deep Learning Handwriting Generation")
+    st.set_page_config(
+        page_title="Deep Learning Handwriting Generation",
+        page_icon="✍️",
+        layout="wide"
+    )
+    
+    st.title("✍️ Deep Learning Handwriting Generation")
     st.write("""
     This app uses a GAN (Generative Adversarial Network) to generate handwritten text.
     Upload your dataset, train the model, and generate handwritten text!
     """)
+    
+    # Display device info
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cuda':
+        st.sidebar.success(f"🚀 Using GPU: {torch.cuda.get_device_name()}")
+    else:
+        st.sidebar.info("💻 Using CPU (GPU recommended for training)")
     
     app = StreamlitHandwritingApp()
     app.setup_folders()
     
     page = st.sidebar.selectbox(
         "Choose a page",
-        ["Upload Dataset", "Train Model", "Generate Handwriting"]
+        ["Upload Dataset", "Train Model", "Generate Handwriting"],
+        index=0
     )
     
     if page == "Upload Dataset":
-        st.header("Upload Dataset")
+        st.header("📁 Upload Dataset")
         st.write("""
         Upload a ZIP file containing:
-        1. Images of handwritten text
-        2. labels.json file mapping image filenames to text
+        1. **Images** of handwritten text (PNG, JPG, etc.)
+        2. **labels.json** file mapping image filenames to text content
         """)
+        
+        # Show example format
+        with st.expander("📋 Dataset Format Example"):
+            st.code('''
+Dataset Structure:
+dataset.zip
+├── image1.png
+├── image2.png
+├── image3.png
+└── labels.json
+
+labels.json format:
+{
+  "image1.png": "Hello World",
+  "image2.png": "Machine Learning",
+  "image3.png": "Deep Learning with PyTorch"
+}
+            ''', language='json')
         
         uploaded_file = st.file_uploader("Choose a ZIP file", type="zip")
         if uploaded_file is not None:
             if app.process_uploaded_dataset(uploaded_file):
-                st.success("Dataset uploaded and processed successfully!")
+                st.success("✅ Dataset uploaded and processed successfully!")
                 try:
                     dataloader = app.load_dataset()
-                    st.write(f"Found {len(dataloader.dataset)} samples")
+                    st.write(f"📊 Found **{len(dataloader.dataset)}** samples")
                     
                     # Show sample data
                     sample_batch = next(iter(dataloader))
-                    st.write(f"Batch size: {sample_batch['image'].shape[0]}")
-                    st.write(f"Image shape: {sample_batch['image'].shape}")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Batch Size", sample_batch['image'].shape[0])
+                        st.metric("Image Shape", f"{sample_batch['image'].shape[2]}×{sample_batch['image'].shape[3]}")
+                    with col2:
+                        st.metric("Total Batches", len(dataloader))
+                        st.metric("Max Text Length", max(sample_batch['length']))
                     
                 except Exception as e:
                     st.error(f"Error loading dataset: {str(e)}")
     
     elif page == "Train Model":
-        st.header("Train Model")
+        st.header("🏋️ Train Model")
         
         if not os.path.exists('uploads/labels.json'):
-            st.error("Please upload a dataset first!")
+            st.error("❌ Please upload a dataset first!")
+            st.info("👈 Go to 'Upload Dataset' page to upload your training data")
+            return
+        
+        # Show dataset info
+        try:
+            with open('uploads/labels.json', 'r') as f:
+                labels = json.load(f)
+            st.success(f"✅ Dataset ready: {len(labels)} samples")
+        except:
+            st.error("❌ Invalid dataset format")
             return
         
         # Hyperparameter controls
-        st.subheader("Training Parameters")
-        num_epochs = st.slider("Number of epochs", 1, 100, 20)
+        st.subheader("⚙️ Training Parameters")
         
         col1, col2 = st.columns(2)
         with col1:
-            batch_size = st.selectbox("Batch size", [8, 16, 32, 64], index=2)
-            learning_rate = st.selectbox("Learning rate", [0.0001, 0.0002, 0.0005], index=1)
+            num_epochs = st.slider("🔄 Number of epochs", 1, 100, 20, 
+                                 help="More epochs = better quality but longer training")
+            batch_size = st.selectbox("📦 Batch size", [8, 16, 32, 64], index=2,
+                                    help="Larger batch = faster training but more memory")
+            learning_rate = st.selectbox("📈 Learning rate", [0.0001, 0.0002, 0.0005], index=1)
         
         with col2:
-            latent_dim = st.selectbox("Latent dimension", [50, 100, 200], index=1)
-            hidden_size = st.selectbox("Hidden size", [256, 512, 1024], index=1)
+            latent_dim = st.selectbox("🎲 Latent dimension", [50, 100, 200], index=1,
+                                    help="Higher = more complex generations")
+            hidden_size = st.selectbox("🧠 Hidden size", [256, 512, 1024], index=1,
+                                     help="Larger = more model capacity")
+            embed_size = st.selectbox("📝 Embedding size", [128, 256, 512], index=1)
         
         # Update hyperparameters
         app.hyperparams.update({
             'batch_size': batch_size,
             'learning_rate': learning_rate,
             'latent_dim': latent_dim,
-            'hidden_size': hidden_size
+            'hidden_size': hidden_size,
+            'embed_size': embed_size
         })
+        st.session_state.hyperparams = app.hyperparams
         
-        if st.button("Start Training"):
-            with st.spinner("Initializing model..."):
-                app.initialize_model()
-                st.success("Model initialized successfully!")
-            
+        # Training info
+        estimated_time = (num_epochs * len(labels) // batch_size) * (2 if device.type == 'cpu' else 0.5)
+        st.info(f"⏱️ Estimated training time: ~{estimated_time:.1f} minutes")
+        
+        if st.button("🚀 Start Training", type="primary"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            with st.spinner("Training in progress..."):
+            with st.spinner("🔥 Training in progress..."):
                 losses = app.train_model(num_epochs, progress_bar)
             
             if losses:
+                st.success("🎉 Training completed successfully!")
+                
+                # Plot training progress
                 fig, ax = plt.subplots(figsize=(10, 6))
-                ax.plot(losses, 'b-', linewidth=2)
+                ax.plot(losses, 'b-', linewidth=2, marker='o', markersize=4)
                 ax.set_xlabel('Epoch')
                 ax.set_ylabel('Generator Loss')
                 ax.set_title('Training Progress')
                 ax.grid(True, alpha=0.3)
+                ax.set_facecolor('#f8f9fa')
                 st.pyplot(fig)
                 
-                st.success("Training completed successfully!")
                 st.balloons()
+                st.info("💾 Models saved automatically every 5 epochs in the 'models' folder")
     
     elif page == "Generate Handwriting":
-        st.header("Generate Handwritten Text")
+        st.header("✨ Generate Handwritten Text")
         
         model_files = []
         if os.path.exists('models'):
             model_files = [f for f in os.listdir('models') if f.endswith('.pth')]
         
         if not model_files:
-            st.error("No trained models found! Please train a model first.")
+            st.error("❌ No trained models found!")
+            st.info("👈 Go to 'Train Model' page to train your first model")
             return
         
-        selected_model = st.selectbox("Select a model", model_files)
+        # Model selection and status
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            selected_model = st.selectbox("🤖 Select a model", model_files,
+                                        help="Choose a trained model checkpoint")
         
-        if st.button("Load Model"):
+        with col2:
+            if st.session_state.model_loaded:
+                st.success("✅ Model Ready")
+            else:
+                st.warning("⚠️ No Model Loaded")
+        
+        # Load model button
+        if st.button("📥 Load Model", type="primary"):
             with st.spinner("Loading model..."):
-                app.load_model(f'models/{selected_model}')
-                st.success("Model loaded successfully!")
+                if app.load_model(f'models/{selected_model}'):
+                    st.success("✅ Model loaded successfully!")
+                    st.rerun()
         
-        text = st.text_input("Enter text to generate", "Hello World!")
+        # Text input and generation
+        st.subheader("📝 Enter Text to Generate")
         
-        if st.button("Generate Handwriting"):
-            if app.model is None:
-                st.error("Please load a model first!")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            text = st.text_input("Text input", "Hello World!", 
+                               help="Enter the text you want to convert to handwriting")
+        with col2:
+            st.metric("Text Length", len(text))
+        
+        # Generation tips
+        with st.expander("💡 Generation Tips"):
+            st.write("""
+            - **Start simple**: Try single words like "Hello", "Test", "AI"
+            - **Character support**: ASCII characters work best (a-z, A-Z, 0-9, basic punctuation)
+            - **Length**: Shorter text (5-15 characters) usually works better
+            - **Quality**: Model quality depends on training epochs and dataset
+            """)
+        
+        if st.button("🎨 Generate Handwriting", type="primary"):
+            if not st.session_state.model_loaded or st.session_state.model is None:
+                st.error("❌ Please load a model first!")
+                return
+            
+            if not text.strip():
+                st.error("❌ Please enter some text to generate")
                 return
                 
-            with st.spinner("Generating handwriting..."):
+            with st.spinner("🎨 Generating handwriting..."):
                 try:
                     generated_image = app.generate_handwriting(text)
                     
-                    fig, ax = plt.subplots(figsize=(12, 4))
-                    ax.imshow(generated_image, cmap='gray')
-                    ax.set_title(f'Generated: "{text}"', fontsize=14)
-                    ax.axis('off')
-                    st.pyplot(fig)
-                    
-                    # Convert to PIL Image for download
-                    img_array = (generated_image * 255).astype(np.uint8)
-                    img_pil = Image.fromarray(img_array)
-                    
-                    buf = io.BytesIO()
-                    img_pil.save(buf, format='PNG')
-                    byte_im = buf.getvalue()
-                    
-                    st.download_button(
-                        "Download Generated Image",
-                        data=byte_im,
-                        file_name=f"handwriting_{text.replace(' ', '_')}.png",
-                        mime="image/png"
-                    )
-                    
+                    if generated_image is not None:
+                        # Display generated image
+                        fig, ax = plt.subplots(figsize=(12, 4))
+                        ax.imshow(generated_image, cmap='gray', interpolation='bilinear')
+                        ax.set_title(f'Generated Handwriting: "{text}"', fontsize=16, pad=20)
+                        ax.axis('off')
+                        ax.set_facecolor('white')
+                        fig.patch.set_facecolor('white')
+                        st.pyplot(fig)
+                        
+                        # Download button
+                        img_array = (generated_image * 255).astype(np.uint8)
+                        img_pil = Image.fromarray(img_array)
+                        
+                        buf = io.BytesIO()
+                        img_pil.save(buf, format='PNG')
+                        byte_im = buf.getvalue()
+                        
+                        st.download_button(
+                            "💾 Download Generated Image",
+                            data=byte_im,
+                            file_name=f"handwriting_{text.replace(' ', '_')}.png",
+                            mime="image/png"
+                        )
+                        
+                    else:
+                        st.error("❌ Failed to generate image")
+                        
                 except Exception as e:
-                    st.error(f"Error generating handwriting: {str(e)}")
+                    st.error(f"❌ Error generating handwriting: {str(e)}")
+    
+    # Sidebar info
+    with st.sidebar:
+        st.write("---")
+        st.subheader("📊 App Info")
+        st.write(f"**Device**: {device.type.upper()}")
+        if st.session_state.model_loaded:
+            st.write("**Model Status**: ✅ Loaded")
+        else:
+            st.write("**Model Status**: ❌ Not Loaded")
+        
+        st.write("---")
+        st.subheader("🔗 Quick Links")
+        st.write("• [PyTorch Documentation](https://pytorch.org/docs/)")
+        st.write("• [Streamlit Documentation](https://docs.streamlit.io/)")
 
 if __name__ == "__main__":
     main()
