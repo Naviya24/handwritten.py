@@ -17,3 +17,6 @@ OUTPUT:
 --Image of generated handwriting
 --Quality analysis report with metrics like sharpness and contrast
 ![image](https://github.com/user-attachments/assets/eb84ed95-dcc0-4ffb-991e-721c86148f7d)
+
+Developed By
+Naviya S.
